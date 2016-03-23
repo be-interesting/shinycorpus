@@ -1,0 +1,1 @@
+d <- reactiveValues(tokens = NULL, meta=NULL, text=NULL, termstats=NULL, tokenstats=NULL) 
