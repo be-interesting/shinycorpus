@@ -1,11 +1,17 @@
-customStyle <- function(sidebarheight='90vh', inputcontainer_height='65px'){
+customStyle <- function(sidebarheight='200vh', inputcontainer_height='65px'){
   list(tags$head(tags$style(HTML(  ## add scroll to sidebar (because conditinalpanels mess up the height)
                             sprintf(".sidebar {height: %s; overflow-y: auto;}", sidebarheight)
                             ))),  
        tags$head(tags$style(HTML(  ## reduce height of input containers
                             sprintf('.shiny-input-container {height:%s;}', inputcontainer_height)
-                            )))) 
+                            ))),
+       tags$head(tags$style(HTML(  
+         sprintf(".shiny-plot-output {overflow: scroll;}", sidebarheight)
+                            )))  
+  )
 }
+
+warningmessage <- function(x) sprintf('<span style=\"color:red\"><h3>%s</h3></span>', x)
 
 ## iterates through default_candidates to see if they occur in choices, and selects the candidate if it does. 
 ## breaks after match, so preferred defaults should be put first
@@ -125,7 +131,7 @@ loadDataButton <- function(){
 
 loadData <- function(session, input, d){
   if(is.null(input$text) & is.null(input$tokens)) return(NULL)
-  
+
   if(input$datatype == 'text'){
     d$tokens = NULL; d$tokenstats = NULL
     dm = readr::read_csv(input$text$datapath)
@@ -147,7 +153,6 @@ loadData <- function(session, input, d){
       d$meta = d$meta[,unique(c(input$meta_docid_col, input$meta_meta_col)), drop=F]
       colnames(d$meta)[colnames(d$meta) == input$meta_docid_col] = 'doc_id' 
     }
-    
     d$tokenstats = calculateTokenStats(d)
   }
 }
@@ -194,7 +199,7 @@ tokensCorpusParametersUI <- function(condition='true'){
 generalCorpusParametersUI <- function(){
   list(
     br(),
-    sliderInput('docfreq', label = 'min/max document frequency', step=1, min = 5, max=10000, value=c(1,10000)),
+    sliderInput('docfreq', label = 'min/max document frequency', step=1, min = 1, max=10000, value=c(1,10000)),
     br(),
     sliderInput('wordlength', label = 'min/max word length', step=1, min=2, max=200, value=c(1, 200))
   )
@@ -215,11 +220,21 @@ updatePosFilter <- function(session, d){
 
 updateDocfreqFilter <- function(session, d){
   n = nrow(d$meta)  
-  updateSliderInput(session, 'docfreq', min=5, max=n, value=c(1,n))
+  updateSliderInput(session, 'docfreq', min=1, max=n, value=c(5,n))
 }
 
 ############################################################################################################
-########################################## preapre corpus ###############################################
+########################################## update action parameters ###############################################
+## ui: 
+## server: updateWorddistanceParameters
+
+updateWorddistanceParameters <- function(session, input, d){
+  updateCheckboxInput(session, 'use_window', value = F)  
+  if(input$datatype == 'tokens' & 'pos' %in% colnames(d$tokens)) updateCheckboxInput(session, 'use_window', value = T)
+}
+
+############################################################################################################
+########################################## prepare corpus ###############################################
 ## ui: 
 ## server: filterTokens; createDTM
 
@@ -301,7 +316,11 @@ plotSemnetUI <- function(condition = 'true'){
                      checkboxInput('use_window', label = 'measure co-occurence within a given word distance', value = F)),
     conditionalPanel(condition = 'input.use_window == true && input.tokens_position_col != "[not available]"',
                      br(),
-                     sliderInput('windowsize', label = 'Word distance window', min = 2, max=50, value=20))
+                     sliderInput('windowsize', label = 'Word distance window', min = 2, max=50, value=20)),
+    
+    sliderInput('semnet_nterms', 'Max number of terms', min = 1, max=200, value = 100),
+    numericInput('semnet_alpha', 'Backbone extraction alpha (use 1 for no backbone extraction)', value = 0.001, min = 0.000000001, max=1),
+    checkboxInput('semnet_clustering', 'Color clusters (demanding for large networks)', value = T)
   )
 }
 
@@ -340,29 +359,68 @@ plotCompareUI <- function(condition='true'){
 ## ui: 
 ## server: plotWordcloud; plotSemnet
 
-plotWordcloud <- function(input, dtm){
-  dtm.wordcloud(dtm, nterms=input$wordcloud_nterms, scale=rev(c(input$wordcloud_range)))
+prepareWordcloud <- function(input, dtm){
+    termfreq = col_sums(dtm)
+    termfreq = head(termfreq[order(-termfreq)], input$wordcloud_nterms)
+    list(termfreq=data.frame(term=names(termfreq), freq=as.numeric(termfreq)), 
+         wordcloud_range = input$wordcloud_range)
 }
 
-plotSemnet <- function(input, dtm, tokens){
+prepareSemnet <- function(input, dtm, tokens){
   termselect = col_sums(dtm)
   termselect = head(names(termselect[order(-termselect)]), 500) # only use top 500 terms to speed up computation
+  
   if(input$use_window){
     tokens = tokens[tokens$text %in% termselect,]
-    g = semnet::wordWindowOccurence(tokens$position, tokens$text, tokens$doc_id, window.size = input$windowsize)
+    print(head(tokens))
+    g = semnet::windowedCoOccurenceNetwork(tokens$position, tokens$text, tokens$doc_id, window.size = input$windowsize)
   } else {
     dtm = dtm[,termselect]
-    print(dtm)
     g = semnet::coOccurenceNetwork(dtm)
   }
-  g = semnet::getBackboneNetwork(g, alpha=0.001, max.vertices=100, use.original.alpha = F)
-  V(g)$cluster = igraph::edge.betweenness.community(g, directed=F)$membership
+
+  g = semnet::getBackboneNetwork(g, alpha=input$semnet_alpha, max.vertices=input$semnet_nterms, use.original.alpha = T)
+  if(ecount(g) == 0) return(list(g=NULL, message=warningmessage("No edges found (try increasing the alpha for the backbone extraction)")))
+  
+  V(g)$cluster = if(input$semnet_clustering) igraph::edge.betweenness.community(g, directed=F)$membership else 1
   g = semnet::setNetworkAttributes(g, V(g)$cluster, V(g)$freq)
-  g
+  list(g=g)
 }
 
-#plotCompare <- function(input, dtm, meta){
+#prepareCompare <- function(input, dtm, meta){
 #  updateSelectInput(session, 'compare_class_col', choices = c(colnames(d$meta), '[No class filter]'))
 #  updateSelectInput(session, 'compare_date_col', choices = c(colnames(d$meta), '[No date filter]'))
 #}
+
+plotWordcloud <- function(actiondata){
+  if(is.null(actiondata$termfreq)) return(NULL)
+  wordcloud(actiondata$termfreq$term, actiondata$termfreq$freq, scale = rev(actiondata$wordcloud_range), 
+            min.freq = 1, max.words = Inf, random.order = FALSE, rot.per = 0.15, colors = brewer.pal(6, "YlGnBu"))
+} 
+
+plotSemnet <- function(actiondata){
+  if(is.null(actiondata$g)) return(NULL)
+  plot(actiondata$g)
+}
+
+
+############################################################################################################
+########################################## OUTPUT parameters ###############################################
+## ui: plotParametersUI
+## server: 
+plotParametersUI <- function(){
+  list(
+    h4('Image size and resolution'),
+    fluidPage(
+      column(sliderInput('plotheight', 'height', step = 10, min = 300, max=2400, value = 1200, post='px'), width = 6),
+      column(sliderInput('plotwidth', 'width', step = 10, min = 300, max=2400, value = 1200, post='px'), width=6)
+    ),
+    fluidPage(
+      column(sliderInput('plotres', 'resolution', step = 1, min = 30, max=300, value = 150, post='dpi'), width = 6),
+      column(sliderInput('plotzoom', 'zoom', step = 0.01, min = 0, max=200, value = 50, post='%'), width = 6)
+    ),
+    br(),
+    downloadLink('saveplot', label = 'Download plot')
+  )
+}
 

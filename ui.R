@@ -2,7 +2,6 @@
 #devtools::install_github('kasperwelbers/semnet')
 library(shinydashboard)
 library(shiny)
-source('lib.r')
 
 #form-group
 
@@ -34,7 +33,7 @@ sidebar <- dashboardSidebar(width = 300,
 ## add codebook box
 body <- dashboardBody(
   fluidRow(
-    tabBox(
+    tabBox(width = 5,
       tabPanel(title = 'Meta',
                dataTableOutput('meta')
       ),
@@ -52,12 +51,16 @@ body <- dashboardBody(
                plotSemnetUI(condition = "input.actions == 'semnet'"),
                plotCompareUI(condition = "input.actions == 'compare'"),
                br(),
-               actionButton('action', 'Perform action')
+               actionButton('plotaction', 'Perform action')
+      ),
+      tabPanel(title = 'Output',
+               plotParametersUI()
       )
     ),
-    tabBox(
+    tabBox(width=7,
       tabPanel(title = "Plot", solidHeader = TRUE,
-               plotOutput('actionplot', width = '100%', height='100%')
+               htmlOutput('actionmessage'),
+               plotOutput('actionplot', width = '95%', height='95%')
       )
     )
   )
